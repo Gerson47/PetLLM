@@ -11,14 +11,14 @@ from app.utils.prompt_builder import build_pet_prompt
 from app.utils.chat_handler import generate_response
 from app.utils.php_service import get_user_by_id, get_pet_by_id, get_pet_status_by_id
 from app.utils.extract_response import extract_response_features, extract_digit_label
-from app.utils.digit_memory_engine import DigitMemoryEngine
+# from app.utils.digit_memory_engine import DigitMemoryEngine
 from app.db.connection import chats_collection, get_db
 from app.utils.language_translator import (
     detect_language,
     translate_to_english,
     translate_to_user_language
 )
-from app.utils.digit_classifier import predict_digit
+# from app.utils.digit_classifier import predict_digit
 # from ip_features.content_moderator import is_flagged_content  # ⛔ disabled for testing
 
 router = APIRouter()

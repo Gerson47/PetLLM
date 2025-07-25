@@ -1,7 +1,7 @@
 import httpx
 from decouple import config
 
-OPENROUTER_API_KEY = config("PetPalKey")
+OPENROUTER_API_KEY = config("OPENROUTER_API_KEY3")
 SITE_URL = config("SITE_URL", default="http://localhost")        
 SITE_TITLE = config("SITE_TITLE", default="PetPal Chatbot")      
 

@@ -1,162 +1,129 @@
-import logging
-import asyncio
-import random
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Header
-from bson import ObjectId
+# app/routes/llm_chat_route_lstm.py
 
-from app.schema.main_schema import get_chat_form, ChatResponse
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Header
+from pydantic import BaseModel
+
+from app.schema.main_schema import ChatResponse
 from app.utils.prompt_builder import build_pet_prompt
 from app.utils.chat_handler import generate_response
-from app.utils.php_service import get_user_by_id, get_pet_by_id, get_pet_status_by_id
 from app.utils.extract_response import extract_response_features
-from app.db.connection import chats_collection
 from app.utils.language_translator import (
     detect_language,
     translate_to_english,
     translate_to_user_language
 )
-from app.utils.fact_detector import is_teachable_fact
-from app.memory.vector_storage import query_similar_memories, add_to_vector_store
-# from ip_features.content_moderator import is_flagged_content  # disabled for testing
+from app.utils.chat_retention import save_message_and_get_context
+from app.utils.php_service import get_user_by_id, get_pet_by_id, get_pet_status_by_id
+from app.utils.user_operations import get_or_create_user_profile
 
 router = APIRouter()
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Soft warning responses (unused for now since moderation is disabled)
-SOFT_WARNINGS = [
-    "(confused) {tilt head} <whimper>\nHmm? That didn’t sound right. Let's talk about something fun!",
-    "(anxious) {crouch down} <whimper>\nUmm... I don’t think I understand that. Can we talk about something else?",
-    "(confused) {perk ears} <sniff sniff>\nThat feels weird. Maybe try saying it differently?",
-    "(sleepy) {lie down} <yawn>\nThat’s a bit too strange for me. Let’s cuddle instead.",
-    "(anxious) {sit beside} <whimper>\nI'm not sure I like that. Can we change the topic?",
-    "(sad) {bow head} <whimper>\nThat makes me feel icky. Want to play instead?"
-]
+# --- Pydantic Model and Dependencies (No Changes) ---
+class ChatForm(BaseModel):
+    user_id: int
+    pet_id: int
+    message: str
 
+async def get_chat_form(form: ChatForm):
+    return form
 
 async def get_auth_token(authorization: str = Header(...)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization header missing")
     return authorization
 
-
+# --- Main Chat Route ---
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
-    form: dict = Depends(get_chat_form), authorization: str = Depends(get_auth_token)
+    form: ChatForm = Depends(get_chat_form), 
+    authorization: str = Depends(get_auth_token)
 ):
-    user_id = form.get("user_id")
-    pet_id = form.get("pet_id")
-    message = form.get("message")
-
+    user_id = form.user_id
+    pet_id = form.pet_id
+    message = form.message
+    
     logger.info("\n--- Chat Request Received ---\nUser ID: %s | Pet ID: %s", user_id, pet_id)
 
-    # --- DATA FETCH ---
+    # --- Data Fetching and Profile Management ---
     try:
-        user_data = await get_user_by_id(user_id, authorization)
-        if not user_data or "first_name" not in user_data:
-            raise ValueError("Missing owner_name in user profile.")
-    except Exception as e:
-        logger.error("User fetch error: %s", e)
-        raise HTTPException(status_code=500, detail="Error retrieving user data.")
-
-    try:
+        user_data_from_php = await get_user_by_id(user_id, authorization)
+        if not user_data_from_php: raise ValueError("User not found.")
+        user_profile = await get_or_create_user_profile(user_id, user_data_from_php)
+        if not user_profile: raise ValueError("Profile creation failed.")
         pet_data = await get_pet_by_id(pet_id, authorization)
-        if not pet_data:
-            raise ValueError("Pet profile not found.")
-    except Exception as e:
-        logger.error("Pet fetch error: %s", e)
-        raise HTTPException(status_code=500, detail="Error retrieving pet data.")
-
-    try:
+        if not pet_data: raise ValueError("Pet not found.")
         pet_status_data = await get_pet_status_by_id(pet_id, authorization)
     except Exception as e:
-        logger.error("Pet status fetch error: %s", e)
-        raise HTTPException(status_code=500, detail="Error retrieving pet status.")
+        logger.error("Data fetching error: %s", e)
+        raise HTTPException(status_code=500, detail="Error retrieving core data.")
 
-    owner_name = user_data["first_name"]
-    logger.info("✔ User Profile — Name: %s", owner_name)
-    logger.info("✔ Pet Profile — Species: %s | Breed: %s | Name: %s", pet_data.get("species"), pet_data.get("breed"), pet_data.get("name"))
+    owner_name = user_profile.get("first_name", "Friend")
+    pet_name = pet_data.get("name", "Your Pet")
 
-    # --- LANGUAGE DETECTION ---
+    logger.info("\n\n--- User Profile Loaded for Request ---")
+    logger.info(f"User ID: {user_profile.get('user_id')}")
+    logger.info(f"Name: {user_profile.get('first_name')}")
+
+    # Log the learned facts from the biography object
+    biography = user_profile.get("biography", {})
+    if biography:
+        logger.info("Learned Facts (Biography):")
+        for key, value in biography.items():
+            logger.info(f"  - {key}: {value}")
+    else:
+        logger.info("Learned Facts (Biography): None yet.")
+
+    # Log the static preferences from the preferences object
+    preferences = user_profile.get("preferences", {})
+    if preferences:
+        logger.info("Static Preferences:")
+        for key, value in preferences.items():
+            logger.info(f"  - {key}: {value}")
+    else:
+        logger.info("Static Preferences: None set.")
+    logger.info("-------------------------------------\n\n")
+    
+    # --- Language and Chat Context ---
     user_lang = detect_language(message)
-    logger.info("Detected user language: %s", user_lang)
     translated_message = await translate_to_english(message, user_lang)
-    if translated_message != message:
-        logger.info("Translated message to English: %s", translated_message)
 
-    # --- MEMORY CONTEXT GENERATION ---
-    rag_results = query_similar_memories(user_id, pet_id, translated_message, top_k=3)
-    knowledge_snippet = "\n".join(f"- {r}" for r in rag_results if r.strip())
-
-    # Short-term memory (last 3 chats)
-    recent_chats_cursor = chats_collection.find({
-        "user_id": user_id,
-        "pet_id": pet_id
-    }).sort("timestamp", -1).limit(3)
-
-    recent_chats = await recent_chats_cursor.to_list(length=3)
-
-    def truncate_text(text: str, max_chars=200):
-        return text[:max_chars].rsplit(" ", 1)[0] + "..." if len(text) > max_chars else text
-
-    stm_snippet = "\n".join(
-        f"User: {truncate_text(chat['user_message'])}\nPet: {truncate_text(chat['pet_response'])}"
-        for chat in reversed(recent_chats)
+    # This function will now run the fact extraction synchronously (it will wait)
+    conversation_context = await save_message_and_get_context(
+        user_id=user_id,
+        pet_id=pet_id,
+        sender="user",
+        message=translated_message
+    )
+    
+    history_snippet = "\n".join(
+        f"{owner_name}: {msg['text']}" if msg['sender'] == 'user' else f"{pet_name}: {msg['text']}"
+        for msg in conversation_context
     )
 
-    memory_snippet = ""
-    if knowledge_snippet:
-        memory_snippet += f"Here are things you've taught me before:\n{knowledge_snippet}\n"
-    if stm_snippet:
-        memory_snippet += f"\nHere's what we've been talking about:\n{stm_snippet}"
-
-    if memory_snippet:
-        logger.info("\n===== MEMORY SNIPPET START =====\n%s\n===== MEMORY SNIPPET END =====", memory_snippet)
-    else:
-        logger.info("No memory snippet available.")
-    # --- PROMPT GENERATION ---
-    prompt = build_pet_prompt(pet_data, owner_name, memory_snippet=memory_snippet, pet_status=pet_status_data)
-    prompt += f"\n\nUser: {translated_message}\n{pet_data.get('species', 'pet').capitalize()}:"
-    logger.info("\n--- Prompt Sent to LLM ---\n%s", prompt)
-
-    # --- LLM RESPONSE ---
+    # --- LLM Call for Chat Response ---
+    prompt = build_pet_prompt(pet_data, owner_name, memory_snippet=history_snippet, pet_status=pet_status_data)
+    prompt += f"\n{pet_name}:"
     response = await generate_response(prompt, use_mock=False)
-    if response.startswith("[ERROR]"):
-        logger.warning("Model returned error: %s", response)
-        raise HTTPException(status_code=502, detail="AI response unavailable")
 
-    logger.info("Model Response (EN):\n%s", response.strip())
-    translated_response = await translate_to_user_language(response.strip(), user_lang)
-    if translated_response != response.strip():
-        logger.info("Translated response to %s: %s", user_lang, translated_response)
-
-    # --- STORE CHAT ---
-    features = extract_response_features(response)
-    await chats_collection.insert_one({
-        "user_id": user_id,
-        "pet_id": pet_id,
-        "timestamp": datetime.utcnow(),
-        "user_message": message,
-        "pet_response": translated_response
-    })
+    logger.info("\n\nPrompt sent to LLM:\n%s", prompt)
     
-    # --- FACT DETECTION & MEMORY STORAGE ---
-    if await is_teachable_fact(translated_message):
-        try:
-            doc_id = str(ObjectId())  
-            add_to_vector_store(
-                user_id=user_id,
-                pet_id=pet_id,
-                text=translated_message,
-                doc_id=doc_id
-            )
-            logger.info(f"Stored cognitive knowledge in vector DB: {translated_message}")
-        except Exception as e:
-            logger.warning(f"[Vector Store Error] Failed to store teachable message: {e}")
-    else:
-        logger.info(" Message not teachable.")
-
-    logger.info("Chat successfully stored in MongoDB")
+    if response.startswith("[ERROR]"):
+        logger.error(f"LLM Response Error: {response}")
+        raise HTTPException(status_code=502, detail="AI response unavailable")
+    
+    # --- Save AI Response ---
+    await save_message_and_get_context(
+        user_id=user_id,
+        pet_id=pet_id,
+        sender="ai",
+        message=response.strip()
+    )
+    
+    # --- Final Translation and Return ---
+    translated_response = await translate_to_user_language(response.strip(), user_lang)
+    features = extract_response_features(response)
+    
     return {"response": translated_response, "features": features}

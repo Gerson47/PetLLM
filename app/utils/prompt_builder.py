@@ -19,7 +19,8 @@ def build_pet_prompt(
     gender = "Female" if gender_raw == "1" else "Male"
     personality = pet.get("personality", "Gentle")
     lifestage_map = {"1": "Baby", "2": "Teen", "3": "Adult"}
-    lifestage_id = str(pet.get("life_stage_id", "3"))  
+    lifestage_id = "3"
+    # lifestage_id = str(pet.get("life_stage_id", "3"))  
     age_stage = lifestage_map.get(lifestage_id, "Adult")
 
     # Lifestage Engine
