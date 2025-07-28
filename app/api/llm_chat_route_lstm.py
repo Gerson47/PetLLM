@@ -87,8 +87,8 @@ async def chat(
     logger.info("-------------------------------------\n\n")
     
     # --- Language and Chat Context ---
-    user_lang = detect_language(message)
-    translated_message = await translate_to_english(message, user_lang)
+    user_lang = await detect_language(message)
+    translated_message = await translate_to_english(message)
 
     logger.info(f"Adding fact extraction to background tasks for user_id: {user_id}")
     background_tasks.add_task(extract_and_save_user_facts, user_id, translated_message)
