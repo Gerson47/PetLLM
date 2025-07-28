@@ -1,5 +1,7 @@
 import logging
 import json
+import asyncio
+import random
 from app.db.connection import user_profiles_collection
 from app.utils.chat_handler import generate_response
 
@@ -28,13 +30,17 @@ async def extract_and_save_user_facts(user_id: int, user_message: str):
     try:
         logger.info(f"BACKGROUND TASK STARTED for user_id {user_id}")
 
+        delay = random.uniform(1.5, 2.0)
+        await asyncio.sleep(delay)
+
+        logger.info(f"BACKGROUND TASK STARTED for user_id {user_id} after {delay:.1f}s delay.")
         prompt = FACT_EXTRACTION_PROMPT.format(user_message=user_message)
         llm_response = await generate_response(prompt, use_mock=False)
 
-        # --- MODIFIED: Critical error checking BEFORE parsing JSON ---
-        if llm_response.strip().startswith("[ERROR]"):
-            logger.error(f"LLM call failed inside fact_extractor for user_id {user_id}. Response: {llm_response}")
-            return # Exit the function gracefully
+        # 2. RESILIENCE: Explicitly check for a known error response from our chat_handler.
+        if isinstance(llm_response, str) and llm_response.strip().startswith("[ERROR]"):
+            logger.error(f"LLM call failed inside fact_extractor for user_id {user_id}. API Response: {llm_response}")
+            return
 
         # Clean up the response to only get the JSON part
         json_str = llm_response.strip()

@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import List, Dict
 
 from app.db.connection import chats_collection
-from app.utils.fact_extractor import extract_and_save_user_facts
 
 logger = logging.getLogger("chat_retention")
 
@@ -16,16 +15,10 @@ async def save_message_and_get_context(
     message: str
 ) -> List[Dict]:
     """
-    Saves a message, AWAITS fact extraction for user messages, and returns
-    a recent slice of the conversation.
+    Saves a message to chat history and returns a recent slice of the conversation.
+    Fact extraction is handled by the route layer via BackgroundTasks.
     """
     try:
-        # If the message is from the user, AWAIT the fact extraction.
-        if sender == 'user':
-            logger.info(f"Awaiting fact extraction for user_id: {user_id}")
-            await extract_and_save_user_facts(user_id, message)
-
-        # Save the current message to the database
         query = {"user_id": user_id, "pet_id": pet_id}
         msg_obj = {"text": message, "sender": sender, "timestamp": datetime.utcnow()}
         
@@ -38,7 +31,6 @@ async def save_message_and_get_context(
             upsert=True
         )
 
-        # Retrieve only the last N messages for the LLM context
         updated_document = await chats_collection.find_one(
             query,
             projection={"messages": {"$slice": -RECENT_MESSAGES_LIMIT}}

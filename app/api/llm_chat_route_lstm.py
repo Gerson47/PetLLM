@@ -1,7 +1,5 @@
-# app/routes/llm_chat_route_lstm.py
-
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks
 from pydantic import BaseModel
 
 from app.schema.main_schema import ChatResponse
@@ -16,6 +14,7 @@ from app.utils.language_translator import (
 from app.utils.chat_retention import save_message_and_get_context
 from app.utils.php_service import get_user_by_id, get_pet_by_id, get_pet_status_by_id
 from app.utils.user_operations import get_or_create_user_profile
+from app.utils.fact_extractor import extract_and_save_user_facts
 
 router = APIRouter()
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +37,7 @@ async def get_auth_token(authorization: str = Header(...)):
 # --- Main Chat Route ---
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
+    background_tasks: BackgroundTasks,
     form: ChatForm = Depends(get_chat_form), 
     authorization: str = Depends(get_auth_token)
 ):
@@ -89,6 +89,9 @@ async def chat(
     # --- Language and Chat Context ---
     user_lang = detect_language(message)
     translated_message = await translate_to_english(message, user_lang)
+
+    logger.info(f"Adding fact extraction to background tasks for user_id: {user_id}")
+    background_tasks.add_task(extract_and_save_user_facts, user_id, translated_message)
 
     # This function will now run the fact extraction synchronously (it will wait)
     conversation_context = await save_message_and_get_context(
