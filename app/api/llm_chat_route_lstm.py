@@ -104,7 +104,7 @@ async def chat(
     )
 
     # --- LLM Call for Chat Response ---
-    prompt = build_pet_prompt(pet_data, owner_name, memory_snippet=history_snippet, pet_status=pet_status_data)
+    prompt = build_pet_prompt(pet_data, owner_name, memory_snippet=history_snippet, pet_status=pet_status_data,  biography_snippet=biography)
     prompt += f"\n{pet_name}:"
     response = await generate_response(prompt, use_mock=False)
 

@@ -7,6 +7,7 @@ def build_pet_prompt(
     owner_name: str,
     memory_snippet: str = "",
     pet_status: dict = None,
+    biography_snippet=""
 ) -> str:
     # Basic Info
     pet_type = (pet.get("pet_type") or pet.get("species", "pet")).capitalize()
@@ -91,6 +92,11 @@ Hibernation Mode: {"On" if hibernating else "Off"}
         f"\n\n— Memory Snippet —\n{memory_snippet}" if memory_snippet else ""
     )
 
+    # Preferences
+    knowledge_section = ""
+    if biography_snippet:
+        knowledge_section += f"--- What You Know About Your Owner ---\n{biography_snippet}"
+
     # Prompt
     return f"""
 You are a virtual {pet_type.lower()} named {name}. You are having a conversation with your owner, {owner_name}.
@@ -110,6 +116,9 @@ Known Commands: {known_cmds_text}
 
 — Owner Profile —
 Owner Name: {owner_name}
+
+- User Preferences -
+{knowledge_section}\n\n
 
 — Response Guidelines —
 You will reply to your owner's latest message using:
