@@ -1,6 +1,8 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks
 from pydantic import BaseModel
+import json
+import re
 
 from app.schema.main_schema import ChatResponse
 from app.utils.prompt_builder import build_pet_prompt
@@ -87,18 +89,17 @@ async def chat(
     logger.info("-------------------------------------\n\n")
     
     # --- Language and Chat Context ---
-    user_lang = await detect_language(message)
-    translated_message = await translate_to_english(message)
+    user_lang = message
 
     logger.info(f"Adding fact extraction to background tasks for user_id: {user_id}")
-    background_tasks.add_task(extract_and_save_user_facts, user_id, translated_message)
+    background_tasks.add_task(extract_and_save_user_facts, user_id, user_lang)
 
     # This function will now run the fact extraction synchronously (it will wait)
     conversation_context = await save_message_and_get_context(
         user_id=user_id,
         pet_id=pet_id,
         sender="user",
-        message=translated_message
+        message=user_lang
     )
     
     history_snippet = "\n".join(
@@ -109,24 +110,44 @@ async def chat(
     # --- LLM Call for Chat Response ---
     prompt = build_pet_prompt(pet_data, owner_name, memory_snippet=history_snippet, pet_status=pet_status_data,  biography_snippet=biography)
     prompt += f"\n{pet_name}:"
-    response = await generate_response(prompt, use_mock=False)
-
+    llm_json_string = await generate_response(prompt)
     logger.info("\n\nPrompt sent to LLM:\n%s", prompt)
-    
-    if response.startswith("[ERROR]"):
-        logger.error(f"LLM Response Error: {response}")
-        raise HTTPException(status_code=502, detail="AI response unavailable")
-    
-    # --- Save AI Response ---
+
+    try:
+        response_data = json.loads(llm_json_string)
+    except json.JSONDecodeError:
+            logger.error(f"Failed to decode JSON from LLM service: {llm_json_string}")
+            raise HTTPException(status_code=502, detail="AI service returned malformed data.")
+
+        # ---> 3. Check for errors using the 'status' key in the parsed JSON
+    if response_data.get("status") == "error":
+            error_message = response_data.get("error", {}).get("message", "Unknown AI error")
+            logger.error(f"LLM Service Error: {error_message}")
+            raise HTTPException(status_code=502, detail=error_message)
+        
+        # ---> 4. Extract the actual AI text response
+    ai_response_text = response_data.get("data", {}).get("response")
+    if not ai_response_text:
+            logger.error(f"AI service response missing 'data.response' field: {response_data}")
+            raise HTTPException(status_code=502, detail="AI service returned an incomplete response.")
+
+    prefix_pattern = f"^{re.escape(pet_name)}\s*:\s*"
+    text_without_prefix = re.sub(prefix_pattern, "", ai_response_text, count=1)
+    cleaned_response = text_without_prefix.strip().replace('\n', ' ')
+        # --- Save AI Response ---
+        # ---> 5. Use the extracted text response here
     await save_message_and_get_context(
-        user_id=user_id,
-        pet_id=pet_id,
-        sender="ai",
-        message=response.strip()
-    )
+            user_id=user_id,
+            pet_id=pet_id,
+            sender="ai",
+            message=cleaned_response
+        )
+        
+        # --- Final Translation and Return ---
+        # ---> 6. Use the extracted text response for feature extraction
+    features = extract_response_features(cleaned_response)
+    logger.info("\n\nUser query: \n%s", user_lang)
+    logger.info("\nAI Response: \n%s", cleaned_response)
     
-    # --- Final Translation and Return ---
-    translated_response = await translate_to_user_language(response.strip(), user_lang)
-    features = extract_response_features(response)
-    
-    return {"response": translated_response, "features": features}
+    # ---> 7. Return the extracted AI response text, not the user's message
+    return {"response": cleaned_response, "features": features}
