@@ -133,7 +133,25 @@ async def chat(
 
     prefix_pattern = f"^{re.escape(pet_name)}\s*:\s*"
     text_without_prefix = re.sub(prefix_pattern, "", ai_response_text, count=1)
-    cleaned_response = text_without_prefix.strip().replace('\n', ' ')
+
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        "\U00002702-\U000027B0"  # Dingbats
+        "\U000024C2-\U0001F251" 
+        "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+        "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        "\U00002620-\U000026FF"  # Miscellaneous Symbols
+        "\U0000200D"             # Zero-width joiner for complex emojis
+        "]+",
+        flags=re.UNICODE,
+    )
+    text_without_emojis = emoji_pattern.sub(r'', text_without_prefix)
+
+    cleaned_response = text_without_emojis.strip().replace('\n', ' ')
         # --- Save AI Response ---
         # ---> 5. Use the extracted text response here
     await save_message_and_get_context(
