@@ -44,3 +44,4 @@ async def save_message_and_get_context(
     except Exception as e:
         logger.error(f"Error in save_message_and_get_context for user {user_id}, pet {pet_id}: {e}", exc_info=True)
         return []
+    

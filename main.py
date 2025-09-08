@@ -4,6 +4,7 @@ import uvicorn
 import os
 
 from app.api.llm_chat_route_lstm import router as chat_router
+from app.api.get_history import router as history_router
 
 
 # FastAPI App Initialization
@@ -23,6 +24,7 @@ app.add_middleware(
 
 # Routers
 app.include_router(chat_router, prefix="/api/v1", tags=["Chat"])
+app.include_router(history_router, prefix="/api/v1", tags=["History"])
 
 # Health Endpoints
 @app.get("/")

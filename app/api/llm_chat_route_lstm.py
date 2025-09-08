@@ -14,6 +14,7 @@ from app.utils.language_translator import (
     translate_to_user_language
 )
 from app.utils.chat_retention import save_message_and_get_context
+from app.api.get_history import get_history
 from app.utils.php_service import get_user_by_id, get_pet_by_id, get_pet_status_by_id
 from app.utils.user_operations import get_or_create_user_profile
 from app.utils.fact_extractor import extract_and_save_user_facts
@@ -101,6 +102,19 @@ async def chat(
         sender="user",
         message=user_lang
     )
+
+    logger.info("Retrieving full conversation history for logging purposes...")
+    full_history = await get_history(user_id=user_id, pet_id=pet_id)
+    if full_history:
+        logger.info(f"--- Full History (User: {user_id}, Pet: {pet_id}) ---")
+        for i, msg in enumerate(full_history):
+            sender = msg.get('sender', 'unknown').upper()
+            text = msg.get('text', '[no text]')
+            timestamp = msg.get('timestamp', 'N/A')
+            logger.info(f"  [{i+1}] ({sender} @ {timestamp}): {text}")
+        logger.info("-----------------------------------------------------")
+    else:
+        logger.info("No extensive chat history found.")
     
     history_snippet = "\n".join(
         f"{owner_name}: {msg['text']}" if msg['sender'] == 'user' else f"{pet_name}: {msg['text']}"
