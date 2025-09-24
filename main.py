@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 
-from app.api.llm_chat_route_lstm import router as chat_router
+from app.api.llm_chat_route_testing import router as chat_router
 from app.api.get_history import router as history_router
 
 

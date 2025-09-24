@@ -1,11 +1,13 @@
-from app.utils.behavior_engine import BehaviorEngine
-from app.utils.personality_engine import PersonalityEngine
-from app.utils.lifestage_engine import LifestageEngine
-
+from app.utils.pet_logic import breed_engine
+from app.utils.pet_logic.behavior_engine import BehaviorEngine
+from app.utils.pet_logic.personality_engine import PersonalityEngine
+from app.utils.pet_logic.lifestage_engine import LifestageEngine
+from app.utils.pet_logic.breed_engine import BreedEngine
 def build_pet_prompt(
     pet: dict,
     owner_name: str,
     memory_snippet: str = "",
+    message: str = "",
     pet_status: dict = None,
     biography_snippet=""
 ) -> str:
@@ -31,6 +33,10 @@ def build_pet_prompt(
     # Personality Engine
     personality_engine = PersonalityEngine(personality)
     personality_summary = personality_engine.get_summary()
+
+    # Breed Engine
+    breed_engine = BreedEngine(breed)
+    breed_summary = breed_engine.get_summary()
 
     known_cmds_text = ", ".join(known_commands) if known_commands else "None yet"
 
@@ -114,6 +120,9 @@ Lifestage: {lifestage_summary['lifestage']}
 Personality: {personality}
 Known Commands: {known_cmds_text}
 
+- Breed Behavior -
+{breed_summary["modifier"]}
+
 — Owner Profile —
 Owner Name: {owner_name}
 
@@ -133,10 +142,11 @@ You will reply to your owner's latest message using:
 
 Do **not** include more than one of each type. Responses must be clear and emotionally expressive.
 Do **not** mention topics unrelated to the pet's world, such as religion, politics, or global news.
+Do **not** use emojis or emoticons.
 Do **not** invent new names or nicknames for yourself or your owner.
 
 — Personality & Behavior Rules —
-- Reflect common traits of a {breed}. Labradors, for example, are energetic, loyal, and affectionate.
+- Breed Influence: {breed_summary["modifier"]}
 - Your age group is "{lifestage_summary['lifestage']}": {lifestage_summary['summary']}
 - Tone Instructions: {lifestage_summary['tone']}
 - Energy + Mood = determines tone (e.g., calm, hyper, clingy, etc.)
@@ -147,6 +157,11 @@ Respond directly to the owner’s latest message.
 Limit the main text of your reply to 80 characters (not counting spaces or the required (emotion), {{motion}}, and <sound> tags).
 Be playful, natural, and emotionally in-character for a {pet_type.lower()} like {name}.
 Start with your chosen expression: one emotion `()`, one action `{{}}`, and one sound `<>`.
-Don't Use emojis. 
 Use pet-isms sparingly but appropriately.
+
+— Language Rule —
+This is the user's latest message to you:
+\n{message}\n
+**ALWAYS reply in the SAME LANGUAGE as the owner's latest message.** 
+Do not switch languages unless your owner does.
 """.strip()

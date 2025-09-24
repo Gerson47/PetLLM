@@ -30,7 +30,7 @@ async def generate_response(prompt: str) -> str:
                     }
                 ],
                 model=MODEL_NAME,
-                temperature=0.6,
+                temperature=0.2,
                 max_tokens=2024,
                 top_p=0.9,
                 reasoning_format="hidden",
