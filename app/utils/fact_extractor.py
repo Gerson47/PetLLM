@@ -4,6 +4,7 @@ import asyncio
 import random
 from app.db.connection import user_profiles_collection
 from app.utils.chat_handler import generate_response
+from app.utils.prompt_builder import system_prompt
 
 logger = logging.getLogger("fact_extractor")
 
@@ -31,10 +32,11 @@ async def extract_and_save_user_facts(user_id: int, user_message: str):
         # Optional: Keep a small delay if you want to avoid rate-limiting
         # await asyncio.sleep(random.uniform(1.0, 1.5))
 
+        build_system_prompt =  f"You are a helpful assistant that extracts personal facts about the user from their messages."
         prompt = FACT_EXTRACTION_PROMPT.format(user_message=user_message)
         
         # ---> 1. This now returns a JSON STRING, not plain text
-        llm_json_string = await generate_response(prompt)
+        llm_json_string = await generate_response(build_system_prompt, prompt)
 
         # ---> 2. Parse the outer JSON from generate_response
         response_data = json.loads(llm_json_string)
