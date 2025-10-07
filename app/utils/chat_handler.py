@@ -11,32 +11,33 @@ client = AsyncGroq(
 SITE_URL = config("SITE_URL", default="http://localhost")
 SITE_TITLE = config("SITE_TITLE", default="Librarian Chatbot")
 
-# Production-ready model but not quite as good as the qwen3-32b
-# MODEL_NAME = "llama-3.1-8b-instant" 
-# Backup model for testing purposes. reasoning_effort="low,medium,high" 
 MODEL_NAME = "openai/gpt-oss-20b" 
-# Default model. Uncomment reasoning_format and reasoning_effort to use qwen3-32b
-# MODEL_NAME = "qwen/qwen3-32b"
 logger = logging.getLogger("llm_client")
- 
-async def generate_response(prompt: str) -> str:
+
+async def generate_response(system_prompt: str, prompt: str) -> str:
  
     try:
+        logger.info(f"Recieved system prompt: {system_prompt}\n")
         chat_completion = await client.chat.completions.create(
                 messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
                     {
                         "role": "user",
                         "content": prompt,
                     }
                 ],
                 model=MODEL_NAME,
-                temperature=0.2,
-                max_tokens=2024,
+                temperature=0.7,
+                max_tokens=250,
                 top_p=0.9,
                 reasoning_format="hidden",
                 reasoning_effort="low"
             )
        
+        # response_content = chat_completion.usage
         response_content = chat_completion.choices[0].message.content
         success_response = {
             "status": "success",
