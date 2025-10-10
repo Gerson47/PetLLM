@@ -29,33 +29,23 @@ async def extract_and_save_user_facts(user_id: int, user_message: str):
     try:
         logger.info(f"BACKGROUND TASK: Starting fact extraction for user_id {user_id}")
         
-        # Optional: Keep a small delay if you want to avoid rate-limiting
-        # await asyncio.sleep(random.uniform(1.0, 1.5))
-
-        build_system_prompt =  f"You are a helpful assistant that extracts personal facts about the user from their messages."
+        build_system_prompt = "You are a helpful assistant that extracts personal facts about the user from their messages into a strict JSON format."
         prompt = FACT_EXTRACTION_PROMPT.format(user_message=user_message)
         
-        # ---> 1. This now returns a JSON STRING, not plain text
         llm_json_string = await generate_response(build_system_prompt, prompt)
-
-        # ---> 2. Parse the outer JSON from generate_response
         response_data = json.loads(llm_json_string)
 
-        # ---> 3. Check for errors and get the actual content
         if response_data.get("status") == "error":
             error_message = response_data.get("error", {}).get("message", "Unknown AI error")
             logger.error(f"LLM call failed inside fact_extractor for user_id {user_id}. API Error: {error_message}")
             return
         
-        # This is the string we actually want to process (e.g., `{"name": "John"}`)
         actual_llm_output = response_data.get("data", {}).get("response")
         
         if not actual_llm_output:
             logger.warning(f"LLM response for user {user_id} was empty or malformed.")
             return
 
-        # ---> 4. Make the JSON cleanup much more robust to prevent crashes
-        # It finds the first '{' and the last '}' to isolate the JSON object
         json_str = actual_llm_output.strip()
         start = json_str.find('{')
         end = json_str.rfind('}')
@@ -65,8 +55,6 @@ async def extract_and_save_user_facts(user_id: int, user_message: str):
             return
             
         json_str = json_str[start : end + 1]
-
-        # ---> 5. Now, parse the cleaned, extracted JSON string
         extracted_facts = json.loads(json_str)
 
         if not isinstance(extracted_facts, dict) or not extracted_facts:
@@ -75,11 +63,28 @@ async def extract_and_save_user_facts(user_id: int, user_message: str):
 
         logger.info(f"Found facts for user_id {user_id}: {extracted_facts}")
         
-        update_fields = {f"biography.{key}": value for key, value in extracted_facts.items()}
-        
-        if "name" in extracted_facts:
-            # Also update the top-level first_name field for convenience
-            update_fields["first_name"] = extracted_facts["name"]
+        # --- FIX IS HERE: Replace dictionary comprehension with a safe loop ---
+        update_fields = {}
+        for key, value in extracted_facts.items():
+            # 1. Validate the key is a non-empty string
+            if not isinstance(key, str) or not key.strip():
+                logger.warning(f"Ignoring invalid (empty or non-string) key from LLM for user {user_id}: '{key}'")
+                continue # Skip this invalid key-value pair
+
+            # 2. Sanitize the key (remove whitespace, ensure snake_case if desired)
+            sanitized_key = key.strip() 
+
+            # 3. Build the update path
+            update_fields[f"biography.{sanitized_key}"] = value
+
+        # No valid fields were created after validation, so exit.
+        if not update_fields:
+            logger.info("No valid facts remained after sanitization for user_id: %s", user_id)
+            return
+
+        # Handle the special 'name' case
+        if "biography.name" in update_fields:
+            update_fields["first_name"] = update_fields["biography.name"]
 
         await user_profiles_collection.update_one(
             {"user_id": user_id},
@@ -88,11 +93,9 @@ async def extract_and_save_user_facts(user_id: int, user_message: str):
         logger.info(f"BACKGROUND TASK FINISHED SUCCESSFULLY for user_id {user_id}.")
 
     except json.JSONDecodeError:
-        # This will catch malformed JSON from the LLM's *actual_llm_output*
         logger.warning(f"Fact extractor could not parse final JSON from LLM response for user {user_id}: {actual_llm_output}")
     except Exception as e:
-        # This will catch ANY other unexpected error
         logger.error(
             f"--- FATAL ERROR IN BACKGROUND TASK for user_id {user_id} ---",
-            exc_info=True  # This includes the full error traceback in your logs
+            exc_info=True
         )

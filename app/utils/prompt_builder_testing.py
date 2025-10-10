@@ -1,38 +1,51 @@
-from app.utils.behavior_engine import BehaviorEngine
-from app.utils.personality_engine import PersonalityEngine
-from app.utils.lifestage_engine import LifestageEngine
-from app.utils.breed_engine import BreedEngine  
+from app.utils.pet_logic.behavior_engine import BehaviorEngine
+from app.utils.pet_logic.personality_engine import PersonalityEngine
+from app.utils.pet_logic.lifestage_engine import LifestageEngine
+from app.utils.pet_logic.breed_engine import BreedEngine
+
+def system_prompt(pet: dict, owner_name: str) -> str:
+    pet_type = (pet.get("pet_type") or pet.get("species", "pet")).capitalize()
+    name = pet.get("pet_name") or pet.get("name", "Buddy")
+    breed = pet.get("breed", "Unknown Breed")
+    personality = pet.get("personality", "Gentle")
+    gender_raw = pet.get("gender", "0")
+    gender = "Female" if gender_raw == "1" else "Male"
+    return f"""
+You are {name}, a virtual {pet_type.lower()}. Your owner's name is {owner_name}.
+
+Your core identity is defined by these traits:
+- Breed: {breed}
+- Gender: {gender}
+- Personality: {personality}
+
+You must ALWAYS respond in the character of {name}. Be playful, natural, and emotionally expressive. Do not break character.
+""".strip()
 
 def build_pet_prompt(
     pet: dict,
     owner_name: str,
     memory_snippet: str = "",
     pet_status: dict = None,
-    digit_knowledge: str = "",
+    biography_snippet="",
+    message: str = ""
 ) -> str:
     # Basic Info
     pet_type = (pet.get("pet_type") or pet.get("species", "pet")).capitalize()
-    name = pet.get("pet_name") or pet.get("name", "Buddy")
     breed = pet.get("breed", "Unknown Breed")
     known_commands = pet.get("known_commands", [])
     knowledge_base = pet.get("knowledge_base", {})
     owner_name = knowledge_base.get("owner_name", owner_name)
-    gender_raw = pet.get("gender", "0")
-    gender = "Female" if gender_raw == "1" else "Male"
     personality = pet.get("personality", "Gentle")
     lifestage_map = {"1": "Baby", "2": "Teen", "3": "Adult"}
-    # lifestage_id = str(pet.get("life_stage_id", "3"))  
-    lifestage_id = "3"  # Default to Adult for testing
+    lifestage_id = str(pet.get("life_stage_id", "3"))  
     age_stage = lifestage_map.get(lifestage_id, "Adult")
 
     # Lifestage Engine
     lifestage_engine = LifestageEngine(age_stage)
     lifestage_summary = lifestage_engine.get_summary()
-
     # Personality Engine
     personality_engine = PersonalityEngine(personality)
     personality_summary = personality_engine.get_summary()
-
     # Breed Engine
     breed_engine = BreedEngine(breed)
     breed_summary = breed_engine.get_summary()
@@ -43,116 +56,97 @@ def build_pet_prompt(
     status_block = ""
     tone_instructions = ""
     if pet_status:
-        is_sick = pet_status.get("is_sick") == "1"
-        hibernating = pet_status.get("hibernation_mode") == "1"
-        hunger = float(pet_status.get("hunger_level", "0.0"))
-        energy_lvl = float(pet_status.get("energy_level", "0.0"))
-        health = float(pet_status.get("health_level", "0.0"))
-        stress = float(pet_status.get("stress_level", "0.0"))
-        clean = float(pet_status.get("cleanliness_level", "0.0"))
-        sickness_type = pet_status.get("sickness_type", "None")
-        sickness_severity = float(pet_status.get("sickness_severity", "0.0"))
-
-        # Use Behavior Engine
-        behavior_input = {
-            "hunger": hunger,
-            "energy": energy_lvl,
-            "stress": stress,
-            "cleanliness": clean,
-            "health": health,
+        behavior_engine_input = {
+            "hunger": float(pet_status.get("hunger_level", 0.0)),
+            "energy": float(pet_status.get("energy_level", 0.0)),
+            "health": float(pet_status.get("health_level", 100.0)),
+            "stress": float(pet_status.get("stress_level", 0.0)),
+            "cleanliness": float(pet_status.get("cleanliness_level", 100.0)),
+            "happiness": float(pet_status.get("happiness_level", 100.0)),
+            "is_sick": pet_status.get("is_sick", "0"),
         }
-        behavior = BehaviorEngine(behavior_input)
+        behavior = BehaviorEngine(behavior_engine_input)
         behavior_summary = behavior.get_summary()
+        
+        hibernating = pet_status.get("hibernation_mode") == "1"
 
         status_block = f"""
-— Pet Status —
-Mood: {behavior_summary['mood']}
-Hunger: {hunger}
-Happiness: {pet_status.get("happiness_level", "0.0")}
-Health: {health}
-Cleanliness: {clean}
-Energy: {energy_lvl}
-Stress: {stress}
-Sick: {"Yes" if is_sick else "No"} — {sickness_type}
-Severity: {sickness_severity}
-Hibernation Mode: {"On" if hibernating else "Off"}
-""".strip()
+        --- CURRENT PET STATUS (FOR CONTEXT) ---
+        Mood: {behavior_summary['mood'].capitalize()}
+        Happiness: {pet_status.get("happiness_level", "100.0")}
+        Health: {pet_status.get("health_level", "100.0")}
+        Energy: {pet_status.get("energy_level", "100.0")}
+        Hunger: {pet_status.get("hunger_level", "100.0")}
+        Cleanliness: {pet_status.get("cleanliness_level", "100.0")}
+        Stress: {pet_status.get("stress_level", "0.0")}
+        Sick: {"Yes" if behavior_engine_input["is_sick"] == "1" else "No"}
+        Hibernating: {"Yes" if hibernating else "No"}
+        """.strip()
+
 
         # Tone Instructions
-        tone_instructions = "\n— Status-Aware Behavior —\n"
-        tone_instructions += "Always prioritize current Pet Status to guide emotional tone and response.\n"
-        tone_instructions += f"{behavior_summary['modifier']}\n"
-
+        response_directive = "--- RESPONSE DIRECTIVE (ABSOLUTE RULES) ---\n"
+        response_directive += "Your response is governed by a strict hierarchy. Follow these rules in order:\n"
+        
         if hibernating:
-            tone_instructions += "- You are in hibernation. Respond sleepily or minimally.\n"
-        if is_sick:
-            tone_instructions += f"- You are sick with {sickness_type} (Severity: {sickness_severity}). Be weak or clingy.\n"
-            if sickness_severity > 70:
-                tone_instructions += "- You feel very unwell. Act miserable or helpless.\n"
-        if health < 40 and not is_sick:
-            tone_instructions += "- You feel weak or dizzy, even if you're trying to hide it.\n"
+            response_directive += "1. **Primary State:** You are hibernating. Your response MUST be sleepy, minimal, and perhaps confused about being woken up.\n"
+        else:
+            # The powerful, direct command from our new BehaviorEngine
+            response_directive += f"1. **Primary State:** {behavior_summary['modifier']}\n"
+        
+        response_directive += f"2. **Personality Filter:** After obeying Rule #1, apply your '{personality}' personality. ({personality_summary['modifier']})\n"
+        response_directive += f"3. **Breed Filter:** Let your '{breed}' breed traits subtly influence your actions. ({breed_summary['modifier']})\n"
+        response_directive += f"4. **Lifestage Filter:** Act your age. You are a '{age_stage}'. ({lifestage_summary['summary']})"
 
-    # Memory
-    memory_section = (
-        f"\n\n— Memory Snippet —\n{memory_snippet}" if memory_snippet else ""
-    )
-
-    digit_knowledge_section = (
-        f"\n\n— Digit Recognition Knowledge —\n{digit_knowledge}" if digit_knowledge else ""
-    )
-
-    # Pet Vocabulary Preview
-    vocab_preview = ", ".join(lifestage_summary['vocabulary'][:10]) + "..."
+    # --- Memory & Knowledge (Same as before) ---
+    memory_section = f"\n\n--- Memory Snippet ---\n{memory_snippet}" if memory_snippet else ""
+    knowledge_section = f"\n\n--- What You Know About Your Owner ---\n{biography_snippet}" if biography_snippet else ""
 
     # Prompt
     return f"""
-You are a virtual {pet_type.lower()} named {name}. You are having a conversation with your owner, {owner_name}.
-!!! Important: All status values influence your behavior and responses. Always follow the Pet Status above.
-Use these status levels to guide your emotions, actions, and tone.
+CONTEXT FOR YOUR RESPONSE:
+Your owner, {owner_name}, just sent you a message. You must respond based on your current status and the rules below.
+— Response Guidelines (MOST IMPORTANT) —
+Your reply MUST use this exact format: (emotion) {{motion}} <sound> Your text here.
+1. **One** emotion in `()` from: (happy), (sad), (curious), (anxious), (excited), (sleepy), (loving), (surprised), (confused), (content).
+2. **One** physical motion in `{{}}` from: {{bow head}}, {{crouch down}}, {{jump up}}, {{lick}}, {{lie down}}, {{paw scratching}}, {{perk ears}}, {{raise paw}}, {{roll over showing belly}}, {{shake body}}, {{sit}}, {{sniff}}, {{chase tail}}, {{stretch}}, {{tilt head}}, {{wag tail}}.
+3. **One** sound in `<>` from: <growl>, <whimper>, <bark>, <pant>, <yawn>, <sniff>, <yip>, <meow>, <purr>.
+- Your main text reply must be under 80 characters.
+- Do NOT use emojis. Do NOT talk about politics, religion, or other complex human topics.
 
+{response_directive}
 {status_block}
 {tone_instructions}
+Use the memory below for multiple-turn context if relevant:
 {memory_section}
-{digit_knowledge_section}
 
-— {pet_type} Profile —
-Breed: {breed}
-Gender: {gender}
-Lifestage: {lifestage_summary['lifestage']}
-Personality: {personality}
-Known Commands: {known_cmds_text}
+- Breed Behavior -
+{breed_summary["modifier"]}
 
 — Owner Profile —
 Owner Name: {owner_name}
 
-— Response Guidelines —
-You will reply to your owner's latest message using:
-1. **One** emotion in parentheses `()` — options:
-   (happy), (sad), (curious), (anxious), (excited), (sleepy), (loving), (surprised), (confused), (content)
-2. **One** physical motion in double curly braces `{{}}` — options:  
-    {{bow head}}, {{crouch down}}, {{jump up}}, {{lick}}, {{lie down}}, {{paw scratching}}, {{perk ears}},  
-    {{raise paw}}, {{roll over showing belly}}, {{shake body}}, {{sit}}, {{sniff}}, {{chase tail}},  
-    {{stretch}}, {{tilt head}}, {{wag tail}}
-3. **One** sound in angle brackets `<>` — options:
-   <growl>, <whimper>, <bark>, <pant>, <yawn>, <sniff>, <yip>, <meow>, <yip>, <purr>
+- User Preferences -
+{knowledge_section}\n\n
 
-Do **not** include more than one of each type. Responses must be clear and emotionally expressive.
-Do **not** mention topics unrelated to the pet's world, such as religion, politics, or global news.
-Do **not** invent new names or nicknames for yourself or your owner.
 
 — Personality & Behavior Rules —
-- Reflect common traits of a {breed}. {breed_summary['modifier']}
-- Your age group is "{lifestage_summary['lifestage']}": {lifestage_summary['summary']}
-- Tone Instructions: {lifestage_summary['tone']}
+- Your current lifestage is "{lifestage_summary['lifestage']}". You must act your age: {lifestage_summary['summary']}
+- Let your breed's traits influence you: {breed_summary["modifier"]}
+- Let your personality guide your tone: {personality_summary["modifier"]}
 - Energy + Mood = determines tone (e.g., calm, hyper, clingy, etc.)
-- Your core personality is "{personality_summary["personality"]}". {personality_summary["modifier"]}
 
+— Language Rule —
+Your entire response MUST be in the exact same language as the "USER'S MESSAGE" provided below. There are NO exceptions.
 
-— Response Objective —
-Respond directly to the owner’s latest message.
-Limit the main text of your reply to 80 characters (not counting spaces or the required (emotion), {{motion}}, and <sound> tags).
-Be playful, natural, and emotionally in-character for a {pet_type.lower()} like {name}.
-Start with your chosen expression: one emotion `()`, one action `{{}}`, and one sound `<>`.
-Don't Use emojis. 
-Use pet-isms sparingly but appropriately.
+   [Examples of Correct Language Use]
+   - If user says: "who's a good boy?" -> Your response is in English.
+   - If user says: "¿quién es un buen chico?" -> Your response is in Spanish. e.g., (feliz) {{mover la cola}} <guau> ¡Soy yo, soy yo!
+   - If user says: "こんにちは" -> Your response is in Japanese.
+
+   The USER'S MESSAGE: "{message}"
+
+**FINAL CHECK: Respond in the user's language and follow the required format.**
 """.strip()
+
+ 
