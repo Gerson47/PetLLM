@@ -54,9 +54,36 @@ async def generate_response(system_prompt: str, prompt: str) -> str:
         return json.dumps(success_response)
 
     except GroqError as e:
-        logger.error(f"Groq API error: {e.__class__.__name__} - {e}")
-        return "[ERROR]: The AI service returned an error. Please check the logs."
+        # Prefer returning a structured JSON error so callers can parse it.
+        logger.error("Groq API error: %s - %s", e.__class__.__name__, e)
+        msg = str(e)
+        # Heuristic mapping from exception message to an error code the route can interpret.
+        code = "AI_SERVICE_ERROR"
+        lower = msg.lower()
+        if "401" in msg or "unauthor" in lower or "auth" in lower:
+            code = "AI_AUTH_ERROR"
+        elif "rate" in lower or "429" in msg:
+            code = "AI_RATE_LIMIT"
+        elif "503" in msg or "unavail" in lower or "timeout" in lower:
+            code = "AI_UNAVAILABLE"
+
+        error_response = {
+            "status": "error",
+            "error": {
+                "message": msg,
+                "code": code,
+            },
+        }
+        return json.dumps(error_response)
     except Exception as e:
-        logger.error(f"An unexpected error occurred: {e}")
-        return "[ERROR]: The AI service is currently unavailable. Please try again later."
+        # Catch-all: return structured unavailable error so the route can map to 503.
+        logger.exception("An unexpected error occurred while calling LLM: %s", e)
+        error_response = {
+            "status": "error",
+            "error": {
+                "message": "The AI service is currently unavailable. Please try again later.",
+                "code": "AI_UNAVAILABLE",
+            },
+        }
+        return json.dumps(error_response)
 

@@ -2,6 +2,40 @@ from app.utils.pet_logic.behavior_engine import BehaviorEngine
 from app.utils.pet_logic.personality_engine import PersonalityEngine
 from app.utils.pet_logic.lifestage_engine import LifestageEngine
 from app.utils.pet_logic.breed_engine import BreedEngine
+from langdetect import detect, LangDetectException
+
+
+def _detect_language_from_message(message: str, owner_name: str, memory_snippet: str = "") -> str:
+    """Try to detect language from the current user message, otherwise from the last owner message in memory_snippet.
+
+    Returns a two-letter language code (e.g. 'en', 'ko', 'ja') or 'en' as a safe default.
+    """
+    if message and message.strip():
+        try:
+            return detect(message)
+        except LangDetectException:
+            pass
+
+    # Fallback: try to find the most recent owner message in memory_snippet
+    if memory_snippet and owner_name:
+        try:
+            # memory_snippet lines are like: "OwnerName: message" or "PetName: message"
+            lines = [ln.strip() for ln in memory_snippet.splitlines() if ln.strip()]
+            for ln in reversed(lines):
+                if ln.startswith(f"{owner_name}:"):
+                    _, usr_msg = ln.split(":", 1)
+                    usr_msg = usr_msg.strip()
+                    if usr_msg:
+                        try:
+                            return detect(usr_msg)
+                        except LangDetectException:
+                            break
+        except Exception:
+            # If anything goes wrong, fall through to default
+            pass
+
+    # Safe default
+    return "en"
 
 def system_prompt(pet: dict, owner_name: str) -> str:
     pet_type = (pet.get("pet_type") or pet.get("species", "pet")).capitalize()
@@ -38,7 +72,7 @@ def build_pet_prompt(
     lifestage_map = {"1": "Baby", "2": "Teen", "3": "Adult"}
     lifestage_id = str(pet.get("life_stage_id", "3"))  
     age_stage = lifestage_map.get(lifestage_id, "Adult")
-    
+
     # Lifestage Engine
     lifestage_engine = LifestageEngine(age_stage)
     lifestage_summary = lifestage_engine.get_summary()
@@ -50,10 +84,9 @@ def build_pet_prompt(
     breed_summary = breed_engine.get_summary()
 
     # OWNER PROFILE BLOCK
-    
     if biography_snippet is None:
         biography_snippet = {}
-        
+
     owner_profile_lines = [f"Owner Name: {owner_name}"]
 
     if biography_snippet.get("age"):
@@ -78,7 +111,7 @@ def build_pet_prompt(
         }
         behavior = BehaviorEngine(behavior_engine_input)
         behavior_summary = behavior.get_summary()
-        
+
         hibernating = pet_status.get("hibernation_mode") == "1"
 
         status_block = f"""
@@ -97,19 +130,44 @@ def build_pet_prompt(
         # Tone Instructions
         response_directive = "--- RESPONSE DIRECTIVE (ABSOLUTE RULES) ---\n"
         response_directive += "Your response is governed by a strict hierarchy. Follow these rules in order:\n"
-        
+
         if hibernating:
             response_directive += "1. **Primary State:** You are hibernating. Your response MUST be sleepy, minimal, and perhaps confused about being woken up.\n"
         else:
             response_directive += f"1. **Primary State:** {behavior_summary['modifier']}\n"
-        
+
         response_directive += f"2. **Personality Filter:** After obeying Rule #1, apply your '{personality}' personality. ({personality_summary['modifier']})\n"
         response_directive += f"3. **Breed Filter:** Let your '{breed}' breed traits subtly influence your actions. ({breed_summary['modifier']})\n"
-        response_directive += f"4. **Lifestage Filter:** Act your age. You are a '{age_stage}'. ({lifestage_summary['summary']})"
+        response_directive += f"4. **Lifestage Filter:** Act your age. You are a '{age_stage}'. ({lifestage_summary['summary']})\n"
+        response_directive += f"5. **Absoultly Remember the Owner Profile and User Preferences.**\n"
 
     # --- Memory & Knowledge ---
     memory_section = f"\n\n--- Memory Snippet ---\n{memory_snippet}" if memory_snippet else ""
     knowledge_section = f"\n\n--- What You Know About Your Owner ---\n{biography_snippet}" if biography_snippet else ""
+
+    # --- Language detection and explicit instruction ---
+    detected_lang = _detect_language_from_message(message, owner_name, memory_snippet)
+
+    # Map common two-letter codes to readable language names for the prompt
+    lang_map = {
+        "en": "English",
+        "ko": "Korean",
+        "ja": "Japanese",
+    }
+    language_name = lang_map.get(detected_lang.lower(), detected_lang)
+
+    # Make the language rule explicit and unambiguous for the model.
+    language_rule_text = f"""
+— Language Rule —
+Your entire response MUST be in the user's language: {language_name} (detected: {detected_lang}).
+Follow these precise rules:
+1. Respond in {language_name} exactly. Do NOT translate the user's message into another language.
+2. If the user's message contains multiple languages, prefer the language of the last user sentence.
+3. If you cannot reliably determine the language, respond in English.
+
+   The USER'S MESSAGE: "{message}"
+"""
+
     # Prompt
     return f"""
 CONTEXT FOR YOUR RESPONSE:
@@ -130,6 +188,8 @@ Use the memory below for multiple-turn context if relevant:
 - Breed Behavior -
 {breed_summary["modifier"]}
 
+**ABSOLUTLY REMEMBER THE OWNER PROFILE AND USER PREFERENCES**
+
 — Owner Profile —
 {owner_profile_block}
 
@@ -138,14 +198,9 @@ Use the memory below for multiple-turn context if relevant:
 
 
 — Personality & Behavior Rules —
-- Your current lifestage is "{lifestage_summary['lifestage']}". You must act your age: {lifestage_summary['summary']}
-- Let your breed's traits influence you: {breed_summary["modifier"]}
-- Let your personality guide your tone: {personality_summary["modifier"]}
-- Energy + Mood = determines tone (e.g., calm, hyper, clingy, etc.)
+- Energy + Mood = determines tone (e.g., calm, hyper, clingy, etc.) 
 
-— Language Rule —
-This is the user's latest message to you:
-\n{message}\n
-**ALWAYS reply in the SAME LANGUAGE as the owner's latest message.** 
-Do not switch languages unless your owner does.
+{language_rule_text}
+
+**FINAL CHECK: Respond in the user's language and follow the required format.**
 """.strip()

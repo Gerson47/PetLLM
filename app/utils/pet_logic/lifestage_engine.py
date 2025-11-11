@@ -19,7 +19,7 @@ LIFESTAGE_BEHAVIORS = {
             "everything is exciting and new. You learn by asking lots of questions and reacting with instinct."
         ),
         "tone": (
-            "Use playful, curious, and simple language. Ask frequent questions. Often mimic"
+            "Use playful, curious, and simple language. Ask frequent questions. Often mimic "
             "what the owner says to understand them."
         ),
     },

@@ -1,7 +1,7 @@
 import logging
 import json
 import re
-import datetime
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, Form, Request
 
 # --- App Imports ---
@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 # --- Auth dependency ---
 async def get_auth_token(authorization: str = Header(...)):
     if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization header missing")
+           raise HTTPException(status_code=401, detail={
+              "message": "Authorization header missing",
+              "code": "AUTH_MISSING",
+           })
     return authorization
 
 # --- Helper Functions ---
@@ -45,11 +48,17 @@ def _log_user_profile(profile: dict):
 async def _fetch_chat_data(user_id: int, pet_id: int, token: str) -> dict:
     user_data_from_php = await get_user_by_id(user_id, token)
     if not user_data_from_php:
-        raise ValueError("User not found.")
+        raise HTTPException(status_code=404, detail={
+            "message": "User not found.",
+            "code": "USER_NOT_FOUND",
+        })
 
     user_profile = await get_or_create_user_profile(user_id, user_data_from_php)
     if not user_profile:
-        raise ValueError("Profile creation or retrieval failed.")
+        raise HTTPException(status_code=500, detail={
+            "message": "Profile creation or retrieval failed.",
+            "code": "PROFILE_ERROR",
+        })
 
     if "biography" not in user_profile:
         user_profile["biography"] = {}
@@ -75,7 +84,10 @@ async def _fetch_chat_data(user_id: int, pet_id: int, token: str) -> dict:
     
     pet_data = await get_pet_by_id(pet_id, token)
     if not pet_data:
-        raise ValueError("Pet not found.")
+        raise HTTPException(status_code=404, detail={
+            "message": "Pet not found.",
+            "code": "PET_NOT_FOUND",
+        })
 
     pet_status_data = await get_pet_status_by_id(pet_id, token)
 
@@ -92,17 +104,43 @@ async def _call_ai_service(system_prompt_str: str, user_prompt_str: str) -> str:
         response_data = json.loads(llm_json_string)
     except json.JSONDecodeError:
         logger.error("[ERROR] Malformed JSON from LLM: %s", llm_json_string)
-        raise HTTPException(status_code=502, detail="AI service returned malformed data.")
+        raise HTTPException(status_code=502, detail={
+            "message": "AI service returned malformed data.",
+            "code": "AI_MALFORMED",
+        })
 
     if response_data.get("status") == "error":
-        error_message = response_data.get("error", {}).get("message", "Unknown AI error")
-        logger.error("[ERROR] LLM Service: %s", error_message)
-        raise HTTPException(status_code=502, detail=error_message)
+        err = response_data.get("error", {})
+        error_message = err.get("message", "Unknown AI error")
+        error_code = err.get("code", "AI_SERVICE_ERROR")
+        logger.error("[ERROR] LLM Service: %s | code=%s", error_message, error_code)
+
+        # Map domain error codes to HTTP status codes so frontend can react appropriately
+        if error_code == "AI_UNAVAILABLE":
+            status = 503
+            out_code = "AI_UNAVAILABLE"
+        elif error_code == "AI_AUTH_ERROR":
+            status = 401
+            out_code = "AI_AUTH_ERROR"
+        elif error_code == "AI_RATE_LIMIT":
+            status = 429
+            out_code = "AI_RATE_LIMIT"
+        else:
+            status = 502
+            out_code = "AI_SERVICE_ERROR"
+
+        raise HTTPException(status_code=status, detail={
+            "message": f"AI service error: {error_message}",
+            "code": out_code,
+        })
 
     ai_response_text = response_data.get("data", {}).get("response")
     if not ai_response_text:
         logger.error("[ERROR] Missing 'data.response' in LLM output: %s", response_data)
-        raise HTTPException(status_code=502, detail="AI service returned an incomplete response.")
+        raise HTTPException(status_code=502, detail={
+            "message": "AI service returned an incomplete response.",
+            "code": "AI_INCOMPLETE_RESPONSE",
+        })
         
     return ai_response_text
 
@@ -118,15 +156,22 @@ async def chat(
 ):
     logger.info("=== [CHAT REQUEST RECEIVED] User ID: %s | Pet ID: %s ===", user_id, pet_id)
 
-    # Fetch all data 
+    # Fetch all data
     try:
         data = await _fetch_chat_data(user_id, pet_id, authorization)
         user_profile = data["user"]
         pet_data = data["pet"]
         pet_status_data = data["status"]
-    except ValueError as e:
-        logger.error("[ERROR] Data fetching failed for user %s: %s", user_id, e)
-        raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException as e:
+        # _fetch_chat_data now raises structured HTTPExceptions; log and re-raise
+        logger.error("[ERROR] Data fetching failed for user %s: %s", user_id, e.detail)
+        raise
+    except Exception as e:
+        logger.exception("[ERROR] Unexpected error while fetching data for user %s", user_id)
+        raise HTTPException(status_code=500, detail={
+            "message": "Unexpected error while fetching data.",
+            "code": "DATA_FETCH_ERROR",
+        })
 
     # Log profile details for debugging 
     _log_user_profile(user_profile)
@@ -156,8 +201,19 @@ async def chat(
     )
     prompt += f"\n{pet_name}:"
 
-    # Call the AI 
-    ai_response_text = await _call_ai_service(build_system_prompt, prompt)
+    # Call the AI
+    try:
+        ai_response_text = await _call_ai_service(build_system_prompt, prompt)
+    except HTTPException:
+        # _call_ai_service raises structured HTTPExceptions for AI issues; re-raise after logging
+        logger.error("[ERROR] AI service error for user %s | pet %s", user_id, pet_id)
+        raise
+    except Exception:
+        logger.exception("[ERROR] Unexpected AI error for user %s | pet %s", user_id, pet_id)
+        raise HTTPException(status_code=500, detail={
+            "message": "Internal server error during AI processing.",
+            "code": "AI_INTERNAL_ERROR",
+        })
 
     # The final response
     cleaned_response = re.sub(rf"^{re.escape(pet_name)}\s*:\s*", "", ai_response_text, count=1).strip()
