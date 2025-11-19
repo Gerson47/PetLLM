@@ -39,7 +39,7 @@ async def generate_response(system_prompt: str, prompt: str) -> str:
                 max_tokens=250,
                 top_p=0.9,
                 reasoning_format="hidden",
-                reasoning_effort="low"
+                reasoning_effort="medium"
             )
 
         response_content = chat_completion.choices[0].message.content

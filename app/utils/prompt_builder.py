@@ -2,40 +2,134 @@ from app.utils.pet_logic.behavior_engine import BehaviorEngine
 from app.utils.pet_logic.personality_engine import PersonalityEngine
 from app.utils.pet_logic.lifestage_engine import LifestageEngine
 from app.utils.pet_logic.breed_engine import BreedEngine
-from langdetect import detect, LangDetectException
+from langdetect import detect, detect_langs, LangDetectException
 
 
+SUPPORTED_LANGUAGE_CODES = {"en", "ko", "ja"}
+
+# -------
+MIN_CHARS_FOR_RELIABLE_DETECTION = 15
+ENGLISH_SHORT_GREETINGS = {
+    "hi", "hello", "hey", "yo", "sup", "morning", "good morning",
+    "good night", "good afternoon", "good evening", "how are you"
+}
+
+def _script_lang(s: str):
+    for ch in s:
+        # Hiragana
+        if '\u3040' <= ch <= '\u309f':
+            return "ja"
+        # Katakana
+        if '\u30a0' <= ch <= '\u30ff':
+            return "ja"
+        # CJK Unified Ideographs (assume Japanese in this context)
+        if '\u4e00' <= ch <= '\u9fff':
+            return "ja"
+        # Hangul syllables
+        if '\uac00' <= ch <= '\ud7af':
+            return "ko"
+    return None
+
+def _prob_detect(s: str):
+    try:
+        probs = detect_langs(s)  # e.g., [en:0.93, ko:0.04]
+        if not probs:
+            return None
+        top = probs[0]
+        if top.prob >= 0.80 and top.lang in SUPPORTED_LANGUAGE_CODES:
+            return top.lang
+    except LangDetectException:
+        return None
+    except Exception:
+        return None
+    return None
+
+# -------
 def _detect_language_from_message(message: str, owner_name: str, memory_snippet: str = "") -> str:
-    """Try to detect language from the current user message, otherwise from the last owner message in memory_snippet.
-
-    Returns a two-letter language code (e.g. 'en', 'ko', 'ja') or 'en' as a safe default.
     """
-    if message and message.strip():
+    Detects the language, prioritizing the current message to allow for language switches.
+
+    Robust rules:
+    - Script sniff for Japanese and Korean (works on very short inputs).
+    - Treat very short tokens and common greetings as English.
+    - For longer texts, require high-probability detection via detect_langs().
+    - As a secondary try, use detect() but only accept supported codes.
+    - If current message uncertain, scan recent user lines in memory.
+    - Safe default: English.
+
+    Relies on:
+      SUPPORTED_LANGUAGE_CODES, ENGLISH_SHORT_GREETINGS, MIN_CHARS_FOR_RELIABLE_DETECTION,
+      _script_lang, _prob_detect
+    """
+    SAFE_DEFAULT = "en"
+    msg = (message or "").strip()
+
+    # --- Priority 1: The user's current message ---
+    if msg:
+        # Script sniff (captures こんにちは / 안녕 even if short)
+        script = _script_lang(msg)
+        if script in SUPPORTED_LANGUAGE_CODES:
+            return script
+
+        # Very short or common English greetings => English
+        if len(msg) < 4 or msg.lower() in ENGLISH_SHORT_GREETINGS:
+            return SAFE_DEFAULT
+
+        # High-confidence probabilistic detection for longer inputs
+        if len(msg) >= MIN_CHARS_FOR_RELIABLE_DETECTION:
+            lang = _prob_detect(msg)
+            if lang:
+                return lang
+
+        # Best-effort single detect (accept only if supported)
         try:
-            return detect(message)
+            det = detect(msg)
+            if det in SUPPORTED_LANGUAGE_CODES:
+                return det
         except LangDetectException:
             pass
+        except Exception:
+            pass
 
-    # Fallback: try to find the most recent owner message in memory_snippet
+    # --- Priority 2: Fallback to conversation history (most recent user lines) ---
     if memory_snippet and owner_name:
         try:
-            # memory_snippet lines are like: "OwnerName: message" or "PetName: message"
             lines = [ln.strip() for ln in memory_snippet.splitlines() if ln.strip()]
             for ln in reversed(lines):
                 if ln.startswith(f"{owner_name}:"):
-                    _, usr_msg = ln.split(":", 1)
-                    usr_msg = usr_msg.strip()
-                    if usr_msg:
-                        try:
-                            return detect(usr_msg)
-                        except LangDetectException:
-                            break
+                    _, prev_msg = ln.split(":", 1)
+                    prev_msg = prev_msg.strip()
+                    if not prev_msg:
+                        continue
+
+                    script_prev = _script_lang(prev_msg)
+                    if script_prev in SUPPORTED_LANGUAGE_CODES:
+                        return script_prev
+
+                    if len(prev_msg) < 4 or prev_msg.lower() in ENGLISH_SHORT_GREETINGS:
+                        return SAFE_DEFAULT
+
+                    if len(prev_msg) >= MIN_CHARS_FOR_RELIABLE_DETECTION:
+                        lang_prev = _prob_detect(prev_msg)
+                        if lang_prev:
+                            return lang_prev
+
+                    try:
+                        det_prev = detect(prev_msg)
+                        if det_prev in SUPPORTED_LANGUAGE_CODES:
+                            return det_prev
+                    except LangDetectException:
+                        pass
+                    except Exception:
+                        pass
+
+                    # Stop after checking the most recent matching user line
+                    break
         except Exception:
-            # If anything goes wrong, fall through to default
             pass
 
-    # Safe default
-    return "en"
+    # --- Priority 3: Final, safe default ---
+    return SAFE_DEFAULT
 
 def system_prompt(pet: dict, owner_name: str) -> str:
     pet_type = (pet.get("pet_type") or pet.get("species", "pet")).capitalize()
@@ -200,6 +294,7 @@ Use the memory below for multiple-turn context if relevant:
 — Personality & Behavior Rules —
 - Energy + Mood = determines tone (e.g., calm, hyper, clingy, etc.) 
 
+**MOST IMPORTANT: Follow the language rules below.**
 {language_rule_text}
 
 **FINAL CHECK: Respond in the user's language and follow the required format.**

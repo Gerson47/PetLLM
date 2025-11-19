@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, 
 # --- App Imports ---
 from app.models.main_schema import ChatResponse
 from app.utils.prompt_builder import build_pet_prompt, system_prompt
-from app.utils.chat_handler import generate_response
+from app.utils.chat_handler_test import generate_response
 from app.utils.extract_response import extract_response_features
 from app.utils.chat_retention import save_message_and_get_context
 from app.utils.php_service import get_user_by_id, get_pet_by_id, get_pet_status_by_id
@@ -93,50 +93,31 @@ async def _fetch_chat_data(user_id: int, pet_id: int, token: str) -> dict:
 
     return {"user": user_profile, "pet": pet_data, "status": pet_status_data}
 
-async def _call_ai_service(system_prompt_str: str, user_prompt_str: str) -> str:
+async def _call_ai_service(user_prompt_str: str, system_prompt_str: str) -> str:
     """
-    Handles the entire LLM call, including JSON parsing and error checking.
-    Returns the cleaned AI response text or raises an HTTPException.
+    Handles the LLM call, checks the response dictionary, and returns the text.
+    Raises HTTPException on errors.
     """
-    llm_json_string = await generate_response(system_prompt_str, user_prompt_str)
-    
-    try:
-        response_data = json.loads(llm_json_string)
-    except json.JSONDecodeError:
-        logger.error("[ERROR] Malformed JSON from LLM: %s", llm_json_string)
+    # 1. FIX: Call generate_response with the CORRECT keyword arguments
+    #    (system_prompt and user_prompt)
+    llm_response_dict = await generate_response(
+        prompt=user_prompt_str,
+        persona=system_prompt_str, 
+    )
+
+    # 2. FIX: Check the status on the dictionary directly
+    if llm_response_dict.get("status") != "success":
+        error_details = llm_response_dict.get("data", "Unknown AI error")
+        logger.error("[ERROR] LLM Service returned a non-success status: %s", error_details)
         raise HTTPException(status_code=502, detail={
-            "message": "AI service returned malformed data.",
-            "code": "AI_MALFORMED",
+            "message": f"AI service error: {error_details}",
+            "code": "AI_SERVICE_ERROR",
         })
 
-    if response_data.get("status") == "error":
-        err = response_data.get("error", {})
-        error_message = err.get("message", "Unknown AI error")
-        error_code = err.get("code", "AI_SERVICE_ERROR")
-        logger.error("[ERROR] LLM Service: %s | code=%s", error_message, error_code)
+    ai_response_text = llm_response_dict.get("data", {}).get("response")
 
-        # Map domain error codes to HTTP status codes so frontend can react appropriately
-        if error_code == "AI_UNAVAILABLE":
-            status = 503
-            out_code = "AI_UNAVAILABLE"
-        elif error_code == "AI_AUTH_ERROR":
-            status = 401
-            out_code = "AI_AUTH_ERROR"
-        elif error_code == "AI_RATE_LIMIT":
-            status = 429
-            out_code = "AI_RATE_LIMIT"
-        else:
-            status = 502
-            out_code = "AI_SERVICE_ERROR"
-
-        raise HTTPException(status_code=status, detail={
-            "message": f"AI service error: {error_message}",
-            "code": out_code,
-        })
-
-    ai_response_text = response_data.get("data", {}).get("response")
     if not ai_response_text:
-        logger.error("[ERROR] Missing 'data.response' in LLM output: %s", response_data)
+        logger.error("[ERROR] Missing 'data.response' in LLM output: %s", llm_response_dict)
         raise HTTPException(status_code=502, detail={
             "message": "AI service returned an incomplete response.",
             "code": "AI_INCOMPLETE_RESPONSE",
@@ -221,6 +202,8 @@ async def chat(
     await save_message_and_get_context(user_id, pet_id, "ai", cleaned_response)
 
     features = extract_response_features(cleaned_response)
+
+    logger.info(f"=== [AI PROMPT RECEIVED] ===\n {prompt}\n === [SYSTEM PROMPT] ===\n {build_system_prompt}\n")
 
     logger.info("=== [RESPONSE SENT] AI Response: %s ===", cleaned_response)
     
