@@ -156,8 +156,12 @@ def build_pet_prompt(
     final_owner_name = kb.get("owner_name", owner_name)
     
     # Engines
-    lifestage_map = {"1": "Baby", "2": "Teen", "3": "Adult"}
-    age_stage = lifestage_map.get(str(pet.get("life_stage_id", "3")), "Adult")
+    lifestage_map = {"3": "Adult"}
+    lifestage_id = str(pet.get("life_stage_id", "3"))  
+    age_stage = lifestage_map.get(lifestage_id, "Adult")
+
+    # lifestage_map = {"3": "Adult"}
+    # age_stage = str(pet.get("life_stage_id"))  
     
     ls_summary = LifestageEngine(age_stage).get_summary()
     pers_summary = PersonalityEngine(pet.get("personality", "Gentle")).get_summary()
@@ -176,8 +180,6 @@ def build_pet_prompt(
     directive_str = ""
     
     if pet_status:
-        is_sick = pet_status.get("is_sick", "0") == "1"
-        is_hibernating = pet_status.get("hibernation_mode") == "1"
         
         # Calculate Behavior
         input_stats = {
@@ -194,15 +196,13 @@ def build_pet_prompt(
         status_str = f"""
         --- STATUS ---
         Mood: {beh_summary['mood'].capitalize()}
-        Stats: Hap:{input_stats['happiness']:.0f}% Egy:{input_stats['energy']:.0f}% Hun:{input_stats['hunger']:.0f}%
-        State: {'Hibernating' if is_hibernating else ('Sick' if is_sick else 'Healthy')}
+        Stats: Happiness:{input_stats['happiness']:.0f}% Energy:{input_stats['energy']:.0f}% Hunger:{input_stats['hunger']:.0f}% 
+               Health:{input_stats['health']:.0f}% Stress:{input_stats['stress']:.0f}% Cleanliness:{input_stats['cleanliness']:.0f}%
         """.strip()
 
         # Hierarchy Logic
-        if is_hibernating:
-            base_rule = "1. **Primary:** You are hibernating. Be sleepy, minimal, confused."
-        else:
-            base_rule = f"1. **Primary:** Act {beh_summary['modifier']} (Based on mood)."
+    
+        base_rule = f"1. **Primary:** Act {beh_summary['modifier']} (Based on mood)."
 
         directive_str = f"""
         --- HIERARCHY OF BEHAVIOR ---

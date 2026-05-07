@@ -14,7 +14,7 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 async def generate_response(prompt: str, persona: str):  
     try:
         response = client.models.generate_content(
-        model="gemini-2.5-flash-lite",
+        model="gemini-3.1-flash-lite-preview",
         contents = [
         types.Content(
             role="user",
@@ -25,7 +25,8 @@ async def generate_response(prompt: str, persona: str):
     ],
         config = types.GenerateContentConfig(
             max_output_tokens=2500,
-            temperature=0.2,
+            temperature=1.5,
+            top_p=0.9,
             thinking_config = types.ThinkingConfig(
                 thinking_budget=0, #set to 1 for thinking mode.
             ),

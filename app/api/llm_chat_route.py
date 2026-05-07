@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, 
 
 # --- App Imports ---
 from app.models.main_schema import ChatResponse
-from app.utils.prompt_builder import build_pet_prompt, system_prompt
+from app.utils.prompt_builder_test import build_pet_prompt, system_prompt
 from app.utils.chat_handler_test import generate_response
 from app.utils.extract_response import extract_response_features
 from app.utils.chat_retention import save_message_and_get_context

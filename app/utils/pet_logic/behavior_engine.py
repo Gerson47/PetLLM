@@ -62,13 +62,13 @@ class BehaviorEngine:
             return Mood.HUNGRY
         if energy < 30:
             return Mood.TIRED
-        if stress > 60:
+        if stress < 30:
             return Mood.STRESSED
         if cleanliness < 40:
             return Mood.DIRTY
 
         # Priority 3: Positive State
-        if happiness > 80 and energy > 60 and stress < 40 and cleanliness > 60:
+        if happiness > 80 and energy > 60 and stress > 30 and cleanliness > 60:
             return Mood.HAPPY
 
         # Default Fallback
