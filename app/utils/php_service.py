@@ -1,7 +1,11 @@
 import httpx
 import logging
+import os
+from dotenv import load_dotenv
 
-API_BASE = "http://3.34.27.237/aipet/api/v1"
+load_dotenv()
+
+API_BASE = os.getenv("API_BASE")
 
 logger = logging.getLogger(__name__)
 
